@@ -32,7 +32,7 @@
 // reports, and that uniform is one of the ones that break this build.
 const vec3 LAVENDER = vec3(0.717647, 0.741176, 0.972549);
 
-const float DURATION = 0.18; // seconds until the trail has vanished
+const float DURATION = 0.24; // seconds until the streak has vanished
 const float MIN_MOVE = 0.6; // line heights; one character advance is ~0.5
 const float MAX_TRAIL = 12.0; // line heights; above this, no trail at all
 
@@ -42,11 +42,18 @@ const float MAX_TRAIL = 12.0; // line heights; above this, no trail at all
 const float PULSE_DURATION = 0.13; // seconds until the glow is gone
 const float PULSE_ALPHA = 0.34; // glow opacity at the moment of landing
 const float PULSE_SCALE = 0.95; // glow radius, as a multiple of the cell size
-const float HEAD_ALPHA = 0.85; // opacity at the cursor end of the trail
-const float TAIL_ALPHA = 0.30; // opacity at the far end of the trail
-const float HALO_SCALE = 1.9; // glow radius, as a multiple of the trail radius
-const float HALO_ALPHA = 0.18; // glow opacity
+const float HEAD_ALPHA = 1.0; // streak opacity at the cursor end
+const float TAIL_ALPHA = 0.55; // streak opacity at the far end
+const float HALO_SCALE = 1.9; // glow radius, as a multiple of the streak radius
+const float HALO_ALPHA = 0.22; // glow opacity
 const float FEATHER = 1.4; // edge softness in pixels
+
+// The blaze look: a solid streak with a pale edge, the way cursor_blaze drew an
+// accent border around a filled parallelogram. The rim is the same lavender
+// pushed toward white, so the effect stays one hue.
+const float RIM_WIDTH = 2.2; // px, half band centred on the streak outline
+const float RIM_ALPHA = 1.0; // rim opacity at full life
+const float RIM_WHITEN = 0.65; // how far the rim moves toward white
 
 float fxSdSegment(vec2 p, vec2 a, vec2 b) {
     vec2 pa = p - a;
@@ -102,9 +109,10 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     if (fragCoord.x < lo.x || fragCoord.x > hi.x) return;
     if (fragCoord.y < lo.y || fragCoord.y > hi.y) return;
 
+    vec3 tint = LAVENDER;
     float alpha = 0.0;
 
-    // Landing glow. Drawn before the trail so the two add up where they overlap.
+    // Landing glow. Drawn before the streak so the two add up where they overlap.
     if (pulseProgress < 1.0) {
         float pulseDist = length(fragCoord - curCenter);
         float ring = 1.0 - smoothstep(pulseRadius * 0.5, pulseRadius, pulseDist);
@@ -114,19 +122,25 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     float haloWidth = radius * (HALO_SCALE - 1.0) + FEATHER;
     float dTrail = fxSdSegment(fragCoord, tail, curCenter) - radius;
     if (dTrail <= haloWidth) {
-        // Brightest at the cursor end, dimmest where the trail was born.
+        // Brightest at the cursor end, dimmest where the streak was born.
         vec2 span = curCenter - tail;
         float along = clamp(dot(fragCoord - tail, span) / max(dot(span, span), 1e-6), 0.0, 1.0);
-        float alongFade = mix(TAIL_ALPHA / HEAD_ALPHA, 1.0, smoothstep(0.0, 1.0, along));
+        float alive = (1.0 - ease) * mix(TAIL_ALPHA / HEAD_ALPHA, 1.0, smoothstep(0.0, 1.0, along));
 
         float core = 1.0 - smoothstep(0.0, FEATHER, dTrail);
         float halo = 1.0 - smoothstep(0.0, haloWidth, dTrail);
+        float fill = (core * HEAD_ALPHA + halo * HALO_ALPHA) * alive;
 
-        alpha += (core * HEAD_ALPHA + halo * HALO_ALPHA) * (1.0 - ease) * alongFade;
+        // Pale edge on the streak outline: this is what reads as a streak
+        // rather than a wash, and it survives being drawn over busy text.
+        float rim = 1.0 - smoothstep(0.0, RIM_WIDTH, abs(dTrail));
+        tint = mix(LAVENDER, vec3(1.0), rim * RIM_WHITEN);
+
+        alpha += max(fill, rim * RIM_ALPHA * alive);
     }
 
     alpha = clamp(alpha, 0.0, 1.0);
     if (alpha <= 0.0) return;
 
-    fragColor = vec4(mix(base.rgb, LAVENDER, alpha), base.a);
+    fragColor = vec4(mix(base.rgb, tint, alpha), base.a);
 }
