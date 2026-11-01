@@ -13,8 +13,11 @@
 //      threshold is one cell *height* times MIN_MOVE; with a typical monospace
 //      advance of about half the line height, that silences one character and
 //      lets two or more through.
-//   2. Silent for long jumps. Enter, page jumps and pane switches must not
-//      paint a full-screen smear.
+//   2. Horizontal jumps are capped. Enter at the end of a line, a soft wrap or
+//      a pane switch must not smear sideways across the window. Vertical
+//      travel is deliberately uncapped, because jumping from the last line of
+//      a buffer to the first is an ordinary move, and a vertical beam down a
+//      single column reads clearly.
 //   3. Nothing is computed outside the trail bounding box. Cost tracks trail
 //      size, not screen size.
 //   4. The cursor itself is never repainted. cursor-color, cursor-text and
@@ -34,7 +37,19 @@ const vec3 LAVENDER = vec3(0.717647, 0.741176, 0.972549);
 
 const float DURATION = 0.24; // seconds until the streak has vanished
 const float MIN_MOVE = 0.6; // line heights; one character advance is ~0.5
-const float MAX_TRAIL = 12.0; // line heights; above this, no trail at all
+// Distances here are in cell sizes, where one cell size is the line height.
+// With a typical 2:1 font 6 cell sizes is roughly 12 character advances, and
+// the same number works for bar and underline cursors whose rect width is not
+// the advance.
+const float MAX_TRAIL_X = 6.0; // cell sizes of sideways travel; above this, no streak
+const float MAX_TRAIL_Y = 80.0; // cell sizes of vertical travel; a guard only
+
+// Long streaks cover more text, so they thin out instead of turning the column
+// into a solid bar. Above TAPER_END cells of travel the streak sits at
+// TAPER_MIN opacity.
+const float TAPER_START = 4.0; // cell sizes where the taper begins
+const float TAPER_END = 30.0; // cell sizes where the taper bottoms out
+const float TAPER_MIN = 0.45; // opacity factor for the longest streaks
 
 // A one-cell vertical move leaves no room for a trail: the two cells touch, so
 // the trail is hidden under the cursor block. A brief glow around the target
@@ -86,9 +101,13 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
     // 1.0 if a trail on every two-character edit still feels busy.
     float cell = max(cellWidth, cellHeight);
 
-    float dist = length(curCenter - prevCenter);
+    vec2 delta = curCenter - prevCenter;
+    float dist = length(delta);
     if (dist <= MIN_MOVE * cell) return;
-    if (dist > MAX_TRAIL * cell) return;
+    if (abs(delta.x) > MAX_TRAIL_X * cell) return;
+    if (abs(delta.y) > MAX_TRAIL_Y * cell) return;
+
+    float taper = mix(1.0, TAPER_MIN, smoothstep(TAPER_START, TAPER_END, dist / cell));
 
     float progress = clamp((iTime - iTimeCursorChange) / DURATION, 0.0, 1.0);
     float pulseProgress = clamp((iTime - iTimeCursorChange) / PULSE_DURATION, 0.0, 1.0);
@@ -125,7 +144,7 @@ void mainImage(out vec4 fragColor, in vec2 fragCoord) {
         // Brightest at the cursor end, dimmest where the streak was born.
         vec2 span = curCenter - tail;
         float along = clamp(dot(fragCoord - tail, span) / max(dot(span, span), 1e-6), 0.0, 1.0);
-        float alive = (1.0 - ease) * mix(TAIL_ALPHA / HEAD_ALPHA, 1.0, smoothstep(0.0, 1.0, along));
+        float alive = (1.0 - ease) * mix(TAIL_ALPHA / HEAD_ALPHA, 1.0, smoothstep(0.0, 1.0, along)) * taper;
 
         float core = 1.0 - smoothstep(0.0, FEATHER, dTrail);
         float halo = 1.0 - smoothstep(0.0, haloWidth, dTrail);
